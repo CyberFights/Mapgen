@@ -1,137 +1,149 @@
-const express = require("express");
-const { createCanvas } = require("canvas");
-const fs = require("fs");
-const path = require("path");
+import express from 'express';
+import { createCanvas } from 'canvas';
 
 const app = express();
 app.use(express.json());
 
-function mulberry32(seed) {
-  return function () {
-    let t = (seed += 0x6D2B79F5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function generateNodes(seed, width, height, count) {
-  const rand = mulberry32(seed);
-  const nodes = [];
-  const margin = 80;
-
-  while (nodes.length < count) {
-    const x = Math.floor(margin + rand() * (width - margin * 2));
-    const y = Math.floor(margin + rand() * (height - margin * 2));
-
-    const ok = nodes.every(n => {
-      const dx = n.x - x;
-      const dy = n.y - y;
-      return dx * dx + dy * dy > 2500;
-    });
-
-    if (ok) nodes.push({ id: nodes.length, x, y, type: nodes.length === 0 ? "citadel" : "ruin" });
+class RuinMapAPI {
+  constructor({ seed = 1, size = 64, tileSize = 1, heightScale = 1 } = {}) {
+    this.seed = seed >>> 0;
+    this.size = size;
+    this.tileSize = tileSize;
+    this.heightScale = heightScale;
+    this.sections = new Map();
   }
 
-  return nodes;
-}
+  async generateSection({ sectionX = 0, sectionY = 0, nextDirection = 'east' } = {}) {
+    const key = `${sectionX},${sectionY}`;
+    if (this.sections.has(key)) return this.sections.get(key);
 
-function generateTree(nodes, seed) {
-  const rand = mulberry32(seed + 1);
-  const edges = [];
+    const noise = this.#makeNoise(this.seed + sectionX * 73856093 + sectionY * 19349663);
+    const tiles = [];
+    const edgeBand = 4;
 
-  for (let i = 1; i < nodes.length; i++) {
-    const parent = Math.floor(rand() * i);
-    edges.push({ from: parent, to: i });
+    for (let z = 0; z < this.size; z++) {
+      for (let x = 0; x < this.size; x++) {
+        const wx = sectionX * (this.size - edgeBand) + x;
+        const wz = sectionY * (this.size - edgeBand) + z;
+        const n = noise(wx * 0.08, wz * 0.08);
+        const road = Math.abs(x - this.size / 2) < 2 || Math.abs(z - this.size / 2) < 2;
+        const rubble = n > 0.58 ? 'large' : n > 0.42 ? 'small' : 'none';
+        const collapsed = n > 0.72;
+        const height = road ? 0 : Math.max(0, Math.round((n - 0.35) * 6) * this.heightScale);
+        const connection = this.#edgeLink(x, z, nextDirection);
+
+        tiles.push({
+          x,
+          z,
+          worldX: wx,
+          worldZ: wz,
+          type: road ? 'street' : collapsed ? 'building_ruin' : 'debris',
+          rubble,
+          height,
+          passable: road || rubble !== 'large',
+          connection
+        });
+      }
+    }
+
+    const section = {
+      sectionX,
+      sectionY,
+      size: this.size,
+      tileSize: this.tileSize,
+      nextDirection,
+      tiles,
+      meta {
+        theme: 'town_ruins',
+        seamlessEdges: true,
+        edgeBand,
+        generatedAt: new Date().toISOString()
+      }
+    };
+
+    this.sections.set(key, section);
+    return section;
   }
 
-  return edges;
+  #edgeLink(x, z, dir) {
+    const max = this.size - 1;
+    if (dir === 'east' && x >= max - 1) return { edge: 'east', linkId: `E-${z}` };
+    if (dir === 'west' && x <= 1) return { edge: 'west', linkId: `W-${z}` };
+    if (dir === 'north' && z <= 1) return { edge: 'north', linkId: `N-${x}` };
+    if (dir === 'south' && z >= max - 1) return { edge: 'south', linkId: `S-${x}` };
+    return null;
+  }
+
+  #makeNoise(seed) {
+    return (x, y) => {
+      let n = Math.sin(x * 12.9898 + y * 78.233 + seed * 0.0001) * 43758.5453;
+      n = n - Math.floor(n);
+      const n2 = Math.sin((x + 11.3) * 5.123 + (y + 7.7) * 91.7 + seed * 0.0002) * 24634.6345;
+      const f2 = n2 - Math.floor(n2);
+      return n * 0.7 + f2 * 0.3;
+    };
+  }
 }
 
-function renderMap(nodes, edges, width, height, seed) {
+function drawPNG(section, width = 1024, height = 1024) {
   const canvas = createCanvas(width, height);
-  const ctx = canvas.getContext("2d");
-  const rand = mulberry32(seed + 2);
+  const ctx = canvas.getContext('2d');
 
-  ctx.fillStyle = "#1d1914";
+  ctx.fillStyle = '#c0d0e0';
   ctx.fillRect(0, 0, width, height);
 
-  for (let i = 0; i < 2500; i++) {
-    const x = rand() * width;
-    const y = rand() * height;
-    const a = rand() * 0.08;
-    ctx.fillStyle = `rgba(255, 240, 210, ${a})`;
-    ctx.fillRect(x, y, 2, 2);
+  const tileW = width / section.size;
+  const tileH = height / section.size;
+
+  for (const t of section.tiles) {
+    const x = t.x * tileW;
+    const y = t.z * tileH;
+
+    if (t.type === 'street') {
+      ctx.fillStyle = '#444444';
+    } else if (t.type === 'building_ruin') {
+      ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#777777';
+    } else {
+      ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#6a5c4a';
+    }
+
+    ctx.fillRect(x, y, tileW, tileH);
   }
 
-  ctx.strokeStyle = "#8a7358";
-  ctx.lineWidth = 6;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-
-  edges.forEach(e => {
-    const a = nodes[e.from];
-    const b = nodes[e.to];
-    const midX = (a.x + b.x) / 2 + (rand() - 0.5) * 30;
-    const midY = (a.y + b.y) / 2 + (rand() - 0.5) * 30;
-
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.quadraticCurveTo(midX, midY, b.x, b.y);
-    ctx.stroke();
-
-    ctx.strokeStyle = "#5f4f3d";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.strokeStyle = "#8a7358";
-    ctx.lineWidth = 6;
-  });
-
-  nodes.forEach((n, i) => {
-    ctx.beginPath();
-    ctx.fillStyle = i === 0 ? "#b89b63" : "#d4c09b";
-    ctx.arc(n.x, n.y, i === 0 ? 11 : 8, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "#2b241d";
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.fillStyle = "#f2e3c6";
-    ctx.font = "16px serif";
-    ctx.fillText(n.type === "citadel" ? "Citadel" : `R${i}`, n.x + 12, n.y - 10);
-  });
-
-  return canvas.toBuffer("image/png");
+  return canvas.toBuffer('image/png');
 }
 
-app.post("/generate", (req, res) => {
-  const seed = Number(req.body.seed ?? Date.now());
-  const width = Number(req.body.width ?? 1024);
-  const height = Number(req.body.height ?? 1024);
-  const nodeCount = Number(req.body.nodeCount ?? 28);
+const api = new RuinMapAPI();
 
-  const nodes = generateNodes(seed, width, height, nodeCount);
-  const edges = generateTree(nodes, seed);
+app.get('/health', (_, res) => res.json({ ok: true }));
 
-  const png = renderMap(nodes, edges, width, height, seed);
+app.post('/api/ruins-map', async (req, res) => {
+  try {
+    const {
+      seed = 1,
+      size = 64,
+      tileSize = 1,
+      heightScale = 1,
+      sectionX = 0,
+      sectionY = 0,
+      nextDirection = 'east',
+      width = 1024,
+      height = 1024
+    } = req.body || {};
 
-  const outDir = path.join(__dirname, "output");
-  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+    const localApi = new RuinMapAPI({ seed, size, tileSize, heightScale });
+    const section = await localApi.generateSection({ sectionX, sectionY, nextDirection });
+    const png = drawPNG(section, width, height);
 
-  const fileName = `ruins_${seed}.png`;
-  const filePath = path.join(outDir, fileName);
-  fs.writeFileSync(filePath, png);
-
-  res.json({
-    imageUrl: `/maps/${fileName}`,
-    graph: { nodes, edges }
-  });
-});
-
-app.get("/maps/:file", (req, res) => {
-  res.sendFile(path.join(__dirname, "output", req.params.file));
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', png.length);
+    res.send(png);
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, "0.0.0.0", () => console.log(`Listening on ${port}`));
+app.listen(port, "0.0.0.0", () => {
+  console.log(`API listening on port ${port}`);
+});
