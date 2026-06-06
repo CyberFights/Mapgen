@@ -19,12 +19,11 @@ class RuinMapAPI {
 
     const noise = this.#makeNoise(this.seed + sectionX * 73856093 + sectionY * 19349663);
     const tiles = [];
-    const edgeBand = 4;
 
     for (let z = 0; z < this.size; z++) {
       for (let x = 0; x < this.size; x++) {
-        const wx = sectionX * (this.size - edgeBand) + x;
-        const wz = sectionY * (this.size - edgeBand) + z;
+        const wx = sectionX * this.size + x;
+        const wz = sectionY * this.size + z;
         const n = noise(wx * 0.08, wz * 0.08);
         const road = Math.abs(x - this.size / 2) < 2 || Math.abs(z - this.size / 2) < 2;
         const rubble = n > 0.58 ? 'large' : n > 0.42 ? 'small' : 'none';
@@ -56,7 +55,6 @@ class RuinMapAPI {
       meta {
         theme: 'town_ruins',
         seamlessEdges: true,
-        edgeBand,
         generatedAt: new Date().toISOString()
       }
     };
@@ -99,13 +97,9 @@ function drawPNG(section, width = 1024, height = 1024) {
     const x = t.x * tileW;
     const y = t.z * tileH;
 
-    if (t.type === 'street') {
-      ctx.fillStyle = '#444444';
-    } else if (t.type === 'building_ruin') {
-      ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#777777';
-    } else {
-      ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#6a5c4a';
-    }
+    if (t.type === 'street') ctx.fillStyle = '#444444';
+    else if (t.type === 'building_ruin') ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#777777';
+    else ctx.fillStyle = t.rubble === 'large' ? '#5b4d3a' : '#6a5c4a';
 
     ctx.fillRect(x, y, tileW, tileH);
   }
@@ -113,37 +107,18 @@ function drawPNG(section, width = 1024, height = 1024) {
   return canvas.toBuffer('image/png');
 }
 
-const api = new RuinMapAPI();
-
-app.get('/health', (_, res) => res.json({ ok: true }));
-
 app.post('/api/ruins-map', async (req, res) => {
   try {
-    const {
-      seed = 1,
-      size = 64,
-      tileSize = 1,
-      heightScale = 1,
-      sectionX = 0,
-      sectionY = 0,
-      nextDirection = 'east',
-      width = 1024,
-      height = 1024
-    } = req.body || {};
-
-    const localApi = new RuinMapAPI({ seed, size, tileSize, heightScale });
-    const section = await localApi.generateSection({ sectionX, sectionY, nextDirection });
+    const { seed = 1, size = 64, sectionX = 0, sectionY = 0, nextDirection = 'east', width = 1024, height = 1024 } = req.body || {};
+    const api = new RuinMapAPI({ seed, size });
+    const section = await api.generateSection({ sectionX, sectionY, nextDirection });
     const png = drawPNG(section, width, height);
 
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Length', png.length);
-    res.send(png);
+    res.type('png').send(png);
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, "0.0.0.0", () => {
-  console.log(`API listening on port ${port}`);
-});
+app.listen(port, "0.0.0.0", () => console.log(`Listening on ${port}`));
