@@ -52,7 +52,7 @@ class RuinMapAPI {
       tileSize: this.tileSize,
       nextDirection,
       tiles,
-      meta {
+      meta: {
         theme: 'town_ruins',
         seamlessEdges: true,
         generatedAt: new Date().toISOString()
