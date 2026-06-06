@@ -1,15 +1,18 @@
 {
   "name": "ruins-map-api",
   "version": "1.0.0",
+  "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "engines": {
     "node": "20.x"
   },
   "dependencies": {
-    "express": "^4.21.0",
-    "canvas": "^2.11.2"
+    "canvas": "^2.11.2",
+    "express": "^4.19.2",
+    "three": "^0.160.0"
   }
 }
