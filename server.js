@@ -1,8 +1,17 @@
 import express from 'express';
 import { createCanvas } from 'canvas';
+import path from 'path';
+import fs from 'fs/promises';
+import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(express.json());
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicDir = path.join(__dirname, 'public');
+
+app.use('/public', express.static(publicDir));
 
 class RuinMapAPI {
   constructor({ seed = 1, size = 64, tileSize = 1, heightScale = 1 } = {}) {
@@ -107,18 +116,51 @@ function drawPNG(section, width = 1024, height = 1024) {
   return canvas.toBuffer('image/png');
 }
 
+app.get('/health', (_, res) => {
+  res.json({ ok: true });
+});
+
 app.post('/api/ruins-map', async (req, res) => {
   try {
-    const { seed = 1, size = 64, sectionX = 0, sectionY = 0, nextDirection = 'east', width = 1024, height = 1024 } = req.body || {};
-    const api = new RuinMapAPI({ seed, size });
+    const {
+      seed = 1,
+      size = 64,
+      tileSize = 1,
+      heightScale = 1,
+      sectionX = 0,
+      sectionY = 0,
+      nextDirection = 'east',
+      width = 1024,
+      height = 1024
+    } = req.body || {};
+
+    await fs.mkdir(publicDir, { recursive: true });
+
+    const api = new RuinMapAPI({ seed, size, tileSize, heightScale });
     const section = await api.generateSection({ sectionX, sectionY, nextDirection });
     const png = drawPNG(section, width, height);
 
-    res.type('png').send(png);
+    const fileName = `ruins-${Date.now()}.png`;
+    const filePath = path.join(publicDir, fileName);
+    await fs.writeFile(filePath, png);
+
+    const baseUrl = process.env.PUBLIC_BASE_URL || '';
+    const url = `${baseUrl}/public/${fileName}`;
+
+    res.json({
+      ok: true,
+      url,
+      fileName
+    });
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
   }
 });
 
 const port = process.env.PORT || 3000;
-app.listen(port, "0.0.0.0", () => console.log(`Listening on ${port}`));
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Server listening on port ${port}`);
+});
